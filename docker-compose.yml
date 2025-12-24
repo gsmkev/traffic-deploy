@@ -28,8 +28,12 @@ services:
       - "8080:8080"
     volumes:
       - ipfs_data:/data/ipfs
+      - ./ipfs-entrypoint.sh:/ipfs-entrypoint.sh:ro
+    entrypoint: ["/ipfs-entrypoint.sh"]
     environment:
       - IPFS_PROFILE=server
+      - IPFS_AUTOCONF=false
+      - QUIC_GO_DISABLE_RECEIVE_BUFFER_WARNING=true
     profiles:
       - local
       - iot
@@ -118,7 +122,7 @@ services:
         - EXECUTION_MODE=${EXECUTION_MODE:-web}
         - USE_IPFS=${USE_IPFS:-false}
         - USE_SUMO=${USE_SUMO:-true}
-    container_name: traffic-storage
+    container_name: traffic-storage-pinata
     restart: unless-stopped
     volumes:
       - ./traffic-storage:/app
@@ -139,6 +143,10 @@ services:
         condition: service_healthy
     profiles:
       - web
+    networks:
+      default:
+        aliases:
+          - traffic-storage
     healthcheck:
       test: ["CMD-SHELL", "curl -f http://localhost:8000/healthcheck || exit 0"]
       interval: 10s
