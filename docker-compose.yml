@@ -1,0 +1,226 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: traffic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: trafficdb
+      POSTGRES_USER: trafficuser
+      POSTGRES_PASSWORD: trafficpass
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U trafficuser -d trafficdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  ipfs:
+    image: ipfs/kubo:latest
+    container_name: traffic-ipfs
+    restart: unless-stopped
+    ports:
+      - "4001:4001"
+      - "5001:5001"
+      - "8080:8080"
+    volumes:
+      - ipfs_data:/data/ipfs
+    environment:
+      - IPFS_PROFILE=server
+    profiles:
+      - local
+      - iot
+    healthcheck:
+      test: ["CMD", "ipfs", "swarm", "peers"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  traffic-sync:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - EXECUTION_MODE=${EXECUTION_MODE:-web}
+        - USE_IPFS=${USE_IPFS:-false}
+        - USE_SUMO=${USE_SUMO:-true}
+    container_name: traffic-sync
+    restart: unless-stopped
+    volumes:
+      - ./traffic-sync:/app
+    environment:
+      - SERVICE_NAME=sync
+      - SERVICE_PORT=8002
+      - DATABASE_URL=postgresql://trafficuser:trafficpass@postgres:5432/trafficdb
+      - EXECUTION_MODE=${EXECUTION_MODE:-web}
+    env_file:
+      - .env
+    ports:
+      - "8002:8002"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8002/healthcheck || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  traffic-storage:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - EXECUTION_MODE=${EXECUTION_MODE:-web}
+        - USE_IPFS=${USE_IPFS:-false}
+        - USE_SUMO=${USE_SUMO:-true}
+    container_name: traffic-storage
+    restart: unless-stopped
+    volumes:
+      - ./traffic-storage:/app
+    environment:
+      - SERVICE_NAME=storage
+      - SERVICE_PORT=8000
+      - DATABASE_URL=postgresql://trafficuser:trafficpass@postgres:5432/trafficdb
+      - IPFS_API_URL=${IPFS_API_URL:-http://ipfs:5001}
+      - EXECUTION_MODE=${EXECUTION_MODE:-web}
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ipfs:
+        condition: service_healthy
+      traffic-sync:
+        condition: service_healthy
+    profiles:
+      - local
+      - iot
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthcheck || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  traffic-storage-pinata:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - EXECUTION_MODE=${EXECUTION_MODE:-web}
+        - USE_IPFS=${USE_IPFS:-false}
+        - USE_SUMO=${USE_SUMO:-true}
+    container_name: traffic-storage
+    restart: unless-stopped
+    volumes:
+      - ./traffic-storage:/app
+    environment:
+      - SERVICE_NAME=storage
+      - SERVICE_PORT=8000
+      - DATABASE_URL=postgresql://trafficuser:trafficpass@postgres:5432/trafficdb
+      - IPFS_API_URL=https://api.pinata.cloud
+      - EXECUTION_MODE=${EXECUTION_MODE:-web}
+    env_file:
+      - .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      traffic-sync:
+        condition: service_healthy
+    profiles:
+      - web
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8000/healthcheck || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  traffic-control:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - EXECUTION_MODE=${EXECUTION_MODE:-web}
+        - USE_IPFS=${USE_IPFS:-false}
+        - USE_SUMO=${USE_SUMO:-true}
+    container_name: traffic-control
+    restart: unless-stopped
+    volumes:
+      - ./traffic-control:/app
+    environment:
+      - SERVICE_NAME=control
+      - SERVICE_PORT=8003
+      - DATABASE_URL=postgresql://trafficuser:trafficpass@postgres:5432/trafficdb
+      - STORAGE_API_URL=http://traffic-storage:8000
+      - SYNC_API_URL=http://traffic-sync:8002
+      - EXECUTION_MODE=${EXECUTION_MODE:-web}
+    env_file:
+      - .env
+    ports:
+      - "8003:8003"
+    depends_on:
+      traffic-sync:
+        condition: service_healthy
+    profiles:
+      - web
+      - local
+      - iot
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8003/healthcheck || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+  traffic-sim:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        - EXECUTION_MODE=${EXECUTION_MODE:-web}
+        - USE_IPFS=${USE_IPFS:-false}
+        - USE_SUMO=${USE_SUMO:-true}
+    container_name: traffic-sim
+    restart: unless-stopped
+    volumes:
+      - ./traffic-sim:/app
+    environment:
+      - SERVICE_NAME=sim
+      - SERVICE_PORT=8001
+      - CONTROL_API_URL=http://traffic-control:8003
+      - CONTROL_URL=http://traffic-control:8003
+      - VISIBLE_RANGE=30.0
+      - SIM_FILE=${SIM_FILE:-/app/sim.zip}
+      - EXECUTION_MODE=${EXECUTION_MODE:-web}
+    env_file:
+      - .env
+    ports:
+      - "8001:8001"
+    depends_on:
+      traffic-control:
+        condition: service_healthy
+    profiles:
+      - web
+      - local
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8001/healthcheck || exit 0"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  pgdata:
+  ipfs_data:
+
